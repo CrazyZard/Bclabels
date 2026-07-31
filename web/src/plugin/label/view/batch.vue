@@ -76,7 +76,9 @@
                     <div class="batch-element-content" :style="batchElementStyle(el)">
                       <template v-if="el.type==='text' && el.translations">
                         <span v-for="(tr, ti) in el.translations" :key="tr.lang"
-                          :style="{fontSize:el.fontSize+'pt',fontFamily:fontCss[el.fontFamily||(tr.isArabic?'ArialMT':'CenturyGothic')],fontWeight:el.bold?'bold':'normal',letterSpacing:(el.letterSpacing||0)+'pt',lineHeight:el.lineHeight||1.5,whiteSpace:'pre-wrap',wordBreak:'break-all',direction:tr.isArabic?'rtl':'ltr',textAlign:tr.isArabic?'right':el.alignment||'left',display:'block',marginTop:ti>0?'6px':'0'}">{{tr.text}}</span>
+                          :style="{fontSize:el.fontSize+'pt',fontFamily:fontCss[el.fontFamily||(tr.isArabic?'ArialMT':'CenturyGothic')],fontWeight:el.bold?'bold':'normal',letterSpacing:(el.letterSpacing||0)+'pt',lineHeight:el.lineHeight||1.5,whiteSpace:'pre-wrap',wordBreak:'break-all',direction:'ltr',textAlign:el.alignment||'left',display:'block',marginTop:ti>0?'6px':'0'}"
+                          v-html="tr.isArabic ? formatArabicDisplayHtml(tr.text) : escapeHtml(tr.text)"
+                        ></span>
                       </template>
                       <template v-else-if="el.type==='image'">
                         <img v-if="el.src" :src="resolveUrl(el.src)" style="max-width:100%;max-height:100%;display:block" />
@@ -140,7 +142,7 @@ import * as XLSX from 'xlsx'
 import { listPublishedTemplate, loadTemplate } from '@/plugin/label/api/template'
 import { downloadBatchTemplate } from '@/plugin/label/api/template'
 import { exportLabelPDF } from '@/plugin/label/utils/pdfExport'
-import { fetchDictionary, translateText } from '@/plugin/label/utils/dictionary'
+import { translateMany, getCachedTranslation, makeTranslateLookup, clearDictionaryCache, formatArabicDisplayHtml, stripBidiMarks } from '@/plugin/label/utils/dictionary'
 
 defineOptions({ name: 'BatchLabelEditor' })
 
@@ -159,7 +161,6 @@ const dictName = ref('')
 const translateLangs = ref([])
 const elements = ref([])
 const translatedElements = ref([])
-const dictionary = ref(null)
 
 const columns = ref([])
 const dataRows = ref([])
@@ -209,9 +210,7 @@ async function onTemplateChange(name) {
       try { translateLangs.value = JSON.parse(t.translateLangs || '[]') } catch { translateLangs.value = [] }
       try { elements.value = JSON.parse(t.elements || '[]') } catch { elements.value = [] }
       try { translatedElements.value = JSON.parse(t.translatedElements || '[]') } catch { translatedElements.value = [] }
-      if (needsTranslation.value && dictName.value) {
-        dictionary.value = await fetchDictionary(dictName.value)
-      }
+      clearDictionaryCache()
       columns.value = []
       dataRows.value = []
       currentRowIndex.value = 0
@@ -270,7 +269,7 @@ function handleFileChange(file) {
   reader.readAsArrayBuffer(file.raw)
 }
 
-function renderCurrentRow() {
+async function renderCurrentRow() {
   if (!dataRows.value.length) {
     currentRenderEls.value = []
     currentRenderBackEls.value = []
@@ -301,8 +300,20 @@ function renderCurrentRow() {
     return copy
   })
 
-  // 反面翻译元素渲染
-  if (needsTranslation.value && translateLangs.value.length && translatedElements.value.length && dictionary.value) {
+  // 反面翻译元素渲染（先批量请求后端）
+  if (needsTranslation.value && translateLangs.value.length && translatedElements.value.length && dictName.value) {
+    const items = []
+    for (const el of translatedElements.value) {
+      if (el.type !== 'text' || !el.key || !el.langKeys?.length) continue
+      const fe = elements.value.find(e => e.key === el.key)
+      const srcText = (fe && rowData[fe.key] !== undefined) ? rowData[fe.key] : (fe?.text || '')
+      if (srcText && String(srcText).trim()) items.push({ text: srcText, langs: [...el.langKeys] })
+    }
+    try {
+      await translateMany(dictName.value, items)
+    } catch (e) {
+      console.error(e)
+    }
     currentRenderBackEls.value = translatedElements.value.map(el => {
       const copy = JSON.parse(JSON.stringify(el))
       if (el.type === 'text' && el.key) {
@@ -312,7 +323,7 @@ function renderCurrentRow() {
           copy.translations = el.langKeys.map(lang => ({
             lang,
             label: langLabel(lang),
-            text: translateText(dictionary.value, srcText, lang) || '[?]',
+            text: stripBidiMarks(getCachedTranslation(dictName.value, srcText, lang) || '[?]'),
             isArabic: lang === 'arabic'
           }))
         } else {
@@ -370,9 +381,19 @@ async function handleExportAllPDF() {
   exporting.value = true
   try {
     if (needsTranslation.value && translateLangs.value.length && dictName.value) {
-      dictionary.value = await fetchDictionary(dictName.value)
+      const items = []
+      for (const rowData of dataRows.value) {
+        for (const el of translatedElements.value) {
+          if (el.type !== 'text' || !el.key || !el.langKeys?.length) continue
+          const fe = elements.value.find(e => e.key === el.key)
+          const srcText = (fe && rowData[fe.key] !== undefined) ? rowData[fe.key] : (fe?.text || '')
+          if (srcText && String(srcText).trim()) items.push({ text: srcText, langs: [...el.langKeys] })
+        }
+      }
+      await translateMany(dictName.value, items)
     }
 
+    const lookup = needsTranslation.value ? makeTranslateLookup(dictName.value) : null
     let doc = null
     for (let i = 0; i < dataRows.value.length; i++) {
       const rowData = dataRows.value[i]
@@ -414,7 +435,7 @@ async function handleExportAllPDF() {
           marginLR: marginLR.value
         },
         translateInfo: needsTranslation.value ? {
-          dictionary: dictionary.value,
+          lookup,
           translateLangs: translateLangs.value
         } : null,
         existingDoc: doc

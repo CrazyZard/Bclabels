@@ -7,6 +7,7 @@ import (
 	"github.com/flipped-aurora/gin-vue-admin/server/model/common/response"
 	"github.com/flipped-aurora/gin-vue-admin/server/plugin/dict/model"
 	"github.com/flipped-aurora/gin-vue-admin/server/plugin/dict/model/request"
+	"github.com/flipped-aurora/gin-vue-admin/server/plugin/dict/service"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -187,7 +188,7 @@ func (a *entry) ImportExcel(c *gin.Context) {
 	response.OkWithDetailed(result, "导入完成", c)
 }
 
-// LoadDictionary 加载完整字典（前端批量翻译用）
+// LoadDictionary 加载完整字典
 func (a *entry) LoadDictionary(c *gin.Context) {
 	dictName := c.Query("dictName")
 	if dictName == "" {
@@ -201,4 +202,60 @@ func (a *entry) LoadDictionary(c *gin.Context) {
 		return
 	}
 	response.OkWithData(entries, c)
+}
+
+// TranslateText 单条翻译（完整引擎）
+func (a *entry) TranslateText(c *gin.Context) {
+	var req request.TranslateTextReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		// 兼容 query 参数
+		req.DictName = c.Query("dictName")
+		req.Chinese = c.Query("chinese")
+		req.Lang = c.Query("lang")
+	}
+	if req.DictName == "" || req.Chinese == "" || req.Lang == "" {
+		response.FailWithMessage("参数不全", c)
+		return
+	}
+	result, err := serviceEntry.TranslateText(req.DictName, req.Chinese, req.Lang)
+	if err != nil {
+		global.GVA_LOG.Error("翻译失败!", zap.Error(err))
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.OkWithDetailed(map[string]string{"translated": result}, "翻译成功", c)
+}
+
+// TranslateBatch 批量翻译
+func (a *entry) TranslateBatch(c *gin.Context) {
+	var req request.TranslateBatchReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	if req.DictName == "" {
+		response.FailWithMessage("字典名称不能为空", c)
+		return
+	}
+	if len(req.Items) == 0 {
+		response.OkWithDetailed(map[string]interface{}{
+			"items":  []interface{}{},
+			"misses": []string{},
+		}, "翻译成功", c)
+		return
+	}
+	items := make([]service.TranslateBatchItem, len(req.Items))
+	for i, it := range req.Items {
+		items[i] = service.TranslateBatchItem{Text: it.Text, Langs: it.Langs}
+	}
+	results, misses, err := serviceEntry.TranslateBatch(req.DictName, items)
+	if err != nil {
+		global.GVA_LOG.Error("批量翻译失败!", zap.Error(err))
+		response.FailWithMessage(err.Error(), c)
+		return
+	}
+	response.OkWithDetailed(map[string]interface{}{
+		"items":  results,
+		"misses": misses,
+	}, "翻译成功", c)
 }

@@ -57,6 +57,24 @@ func Api(ctx context.Context) {
 			ApiGroup:    "翻译字典",
 			Method:      "GET",
 		},
+		{
+			Path:        "/entry/translateText",
+			Description: "单条文本翻译",
+			ApiGroup:    "翻译字典",
+			Method:      "POST",
+		},
+		{
+			Path:        "/entry/translateText",
+			Description: "单条文本翻译(GET)",
+			ApiGroup:    "翻译字典",
+			Method:      "GET",
+		},
+		{
+			Path:        "/entry/translateBatch",
+			Description: "批量文本翻译",
+			ApiGroup:    "翻译字典",
+			Method:      "POST",
+		},
 	}
 	utils.RegisterApis(entities...)
 }

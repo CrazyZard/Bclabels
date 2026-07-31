@@ -1,6 +1,5 @@
 import { jsPDF } from 'jspdf'
 import { svg2pdf } from 'svg2pdf.js'
-import { translateText as dictTranslate } from './dictionary'
 import { convertSvgTextToPaths, FontMissingError } from './svgTextToPaths'
 
 // ========== Constants ==========
@@ -285,7 +284,7 @@ async function buildPageSvg(elements, config, opts = {}) {
 const LANG_STYLE = {
   english: { font: 'CenturyGothic', dir: 'ltr' },
   russian: { font: 'CenturyGothic', dir: 'ltr' },
-  arabic: { font: 'ArialMT', dir: 'rtl' },
+  arabic: { font: 'ArialMT', dir: 'ltr' },
   indonesian: { font: 'CenturyGothic', dir: 'ltr' },
 }
 
@@ -347,10 +346,10 @@ async function appendTextToSvg(svg, el, x, y, width, height, doc, translateInfo,
   const alignment = el.alignment || 'left'
 
   // backside translation — match by key (Excel header), render all langKeys
-  if (isBack && el.langKeys?.length && translateInfo?.dictionary) {
+  if (isBack && el.langKeys?.length && translateInfo?.lookup) {
     const frontEl = frontElements?.find(e => el.key ? e.key === el.key : e.id === el.id)
-    const source = frontEl?.text?.trim()
-    if (source && source !== 'text') {
+    const source = frontEl?.text
+    if (source && source.trim() && source.trim() !== 'text') {
       appendBackTranslationSvg(svg, el, x, y, width, height, doc, translateInfo, source, fontSize, valign, lineH)
       return
     }
@@ -537,7 +536,7 @@ function appendBackTranslationSvg(svg, el, x, y, width, height, doc, translateIn
   // collect per-language line groups
   const groups = []
   for (const lang of langs) {
-    const translated = dictTranslate(translateInfo.dictionary, source, lang)
+    const translated = translateInfo.lookup(source, lang)
     const text = (translated && translated !== source) ? translated : source
     const style = LANG_STYLE[lang] || { font: 'CenturyGothic', dir: 'ltr' }
     const lines = splitTextToLines(doc, text, style.font, baseFontSize, width)
@@ -741,7 +740,7 @@ function normalizeSvgFontsForPdf(svgEl) {
  * @param {Array}  cfg.frontElements
  * @param {Array}  cfg.backElements
  * @param {Object} cfg.config          { labelWidth, labelHeight, headSeam, marginLR }
- * @param {Object} cfg.translateInfo   { dictionary, translateLangs }
+ * @param {Object} cfg.translateInfo   { lookup(source, lang), translateLangs }
  * @param {String} cfg.fileName
  */
 export async function exportLabelPDF({

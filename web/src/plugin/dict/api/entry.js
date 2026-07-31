@@ -66,3 +66,19 @@ export const loadDictionary = (params) => {
     params
   })
 }
+
+export const translateText = (data) => {
+  return service({
+    url: '/entry/translateText',
+    method: 'post',
+    data
+  })
+}
+
+export const translateBatch = (data) => {
+  return service({
+    url: '/entry/translateBatch',
+    method: 'post',
+    data
+  })
+}

@@ -124,8 +124,8 @@
                     <div class="drag-handle"><el-icon><Menu/></el-icon></div>
                     <div class="element-content" :style="elementContentStyle(element)">
                       <template v-if="element.type==='text'">
-                        <template v-if="element.langKeys&&element.langKeys.length&&dictionary">
-                          <span v-for="(lang,li) in element.langKeys" :key="lang" :style="{fontSize:element.fontSize+'pt',fontFamily:fontMap[element.fontFamily||(lang==='arabic'?'ArialMT':'CenturyGothic')],fontWeight:element.bold?'bold':'normal',letterSpacing:(element.letterSpacing||0)+'pt',lineHeight:element.lineHeight||1.5,whiteSpace:'pre-wrap',wordBreak:'break-all',direction:lang==='arabic'?'rtl':'ltr',textAlign:lang==='arabic'?'right':element.alignment||'left',display:'block',marginTop:li>0?'6px':'0'}">{{getLangTranslation(element,lang)}}</span>
+                        <template v-if="element.langKeys&&element.langKeys.length&&dictName">
+                          <span v-for="(lang,li) in element.langKeys" :key="lang" :style="{fontSize:element.fontSize+'pt',fontFamily:fontMap[element.fontFamily||(lang==='arabic'?'ArialMT':'CenturyGothic')],fontWeight:element.bold?'bold':'normal',letterSpacing:(element.letterSpacing||0)+'pt',lineHeight:element.lineHeight||1.5,whiteSpace:'pre-wrap',wordBreak:'break-all',direction:'ltr',textAlign:element.alignment||'left',display:'block',marginTop:li>0?'6px':'0'}" v-html="formatLangHtml(element,lang)" />
                         </template>
                         <span v-else class="rich-preview" v-html="elementHtml(element)" /></template>
                       <template v-else-if="element.type==='image'">
@@ -258,7 +258,7 @@ import { EditPen, Picture, Grid, Delete, Search, Plus, ArrowLeft, Menu } from '@
 import draggable from 'vuedraggable'
 import { saveTemplate, loadTemplate, listTemplate, deleteTemplate, publishTemplate, unpublishTemplate } from '@/plugin/label/api/template'
 import { getImageList } from '@/plugin/image/api/image'
-import { fetchDictionary, translateText as dictTranslate } from '@/plugin/label/utils/dictionary'
+import { translateMany, getCachedTranslation, makeTranslateLookup, clearDictionaryCache, formatArabicDisplayHtml, stripBidiMarks } from '@/plugin/label/utils/dictionary'
 import { exportLabelPDF } from '@/plugin/label/utils/pdfExport'
 
 defineOptions({ name: 'LabelEditor' })
@@ -274,7 +274,8 @@ const exporting = ref(false), viewMode = ref('list'), searchKeyword = ref(''), a
 const templateName = ref(''), labelWidth = ref(80), labelHeight = ref(120), headSeam = ref(8), marginLR = ref(2)
 const defaultFont = ref('FZLTXIHJW--GB1-0'), defaultFontSize = ref(5), elements = ref([]), selectedId = ref(null), selectedSide = ref('front')
 const zoomLevel = ref(8), scale = computed(() => zoomLevel.value), canvasHeight = computed(() => Math.max(5, labelHeight.value - headSeam.value))
-const needsTranslation = ref(false), translateLangs = ref([]), dictName = ref('巴拉'), dictionary = ref(null), translatedElements = ref([])
+const needsTranslation = ref(false), translateLangs = ref([]), dictName = ref('巴拉'), translatedElements = ref([])
+const translationTick = ref(0)
 
 const tableEdit = ref({ rows: 2, cols: 6, text: '130\t140\t150\t160\t170\t175\n127\t118\t143\t159\t177\t183' })
 function syncTableEdit(el) { if (!el || el.type !== 'table') return; tableEdit.value.rows = el.cells?.length || el.rows || 2; tableEdit.value.cols = (el.cells && el.cells[0]?.length) || el.cols || 6; tableEdit.value.text = cellsToText(el.cells || buildDefaultCells(el)) }
@@ -299,14 +300,93 @@ async function handlePublish(name) { try { const res = await publishTemplate({ n
 
 async function handleUnpublish(name) { try { const res = await unpublishTemplate({ name }); if (res.code === 0) { ElMessage.success('已取消发布'); refreshList() } } catch { ElMessage.error('取消发布失败') } }
 
-async function openTemplate(name) { fetchImageList(); const res = await loadTemplate({ name }); if (res.code === 0) { const t = res.data; templateName.value = t.name; labelWidth.value = t.labelWidth || 80; labelHeight.value = t.labelHeight || 120; headSeam.value = t.headSeam || 8; marginLR.value = t.marginLR ?? 2; needsTranslation.value = t.needsTranslation || false; dictName.value = t.dictName || '巴拉'; try { translateLangs.value = JSON.parse(t.translateLangs || '[]') } catch { translateLangs.value = [] } try { elements.value = JSON.parse(t.elements || '[]'); const maxId = elements.value.reduce((max, e) => Math.max(max, parseInt(e.id?.replace('el_','')||'0')), 0); idCounter = maxId + 1 } catch { elements.value = [] } try { translatedElements.value = JSON.parse(t.translatedElements || '[]') } catch { translatedElements.value = [] } selectedId.value = null; selectedSide.value = 'front'; viewMode.value = 'editor'; if (needsTranslation.value && dictName.value) dictionary.value = await fetchDictionary(dictName.value) } }
+async function openTemplate(name) {
+  fetchImageList()
+  const res = await loadTemplate({ name })
+  if (res.code === 0) {
+    const t = res.data
+    templateName.value = t.name
+    labelWidth.value = t.labelWidth || 80
+    labelHeight.value = t.labelHeight || 120
+    headSeam.value = t.headSeam || 8
+    marginLR.value = t.marginLR ?? 2
+    needsTranslation.value = t.needsTranslation || false
+    dictName.value = t.dictName || '巴拉'
+    try { translateLangs.value = JSON.parse(t.translateLangs || '[]') } catch { translateLangs.value = [] }
+    try {
+      elements.value = JSON.parse(t.elements || '[]')
+      const maxId = elements.value.reduce((max, e) => Math.max(max, parseInt(e.id?.replace('el_', '') || '0')), 0)
+      idCounter = maxId + 1
+    } catch { elements.value = [] }
+    try { translatedElements.value = JSON.parse(t.translatedElements || '[]') } catch { translatedElements.value = [] }
+    selectedId.value = null
+    selectedSide.value = 'front'
+    viewMode.value = 'editor'
+    clearDictionaryCache()
+    await refreshBackTranslations()
+  }
+}
 function backToList() { viewMode.value = 'list'; refreshList() }
 
-function handleSetupConfirm() { setupFormRef.value?.validate(async (valid) => { if (!valid) return; const f = setupForm.value; templateName.value = f.name; labelWidth.value = f.labelWidth; labelHeight.value = f.labelHeight; headSeam.value = f.headSeam || 0; marginLR.value = f.marginLR ?? 2; defaultFont.value = f.defaultFontFamily; defaultFontSize.value = f.defaultFontSizePt; needsTranslation.value = f.needsTranslation; dictName.value = f.dictName || '巴拉'; if (setupEdit.value) { ElMessage.success('配置已更新') } else { elements.value = []; translatedElements.value = []; idCounter = 1; selectedId.value = null; selectedSide.value = 'front'; viewMode.value = 'editor'; fetchImageList(); if (needsTranslation.value) dictionary.value = await fetchDictionary(dictName.value) } showSetupDialog.value = false; setupEdit.value = false }) }
+function handleSetupConfirm() {
+  setupFormRef.value?.validate(async (valid) => {
+    if (!valid) return
+    const f = setupForm.value
+    templateName.value = f.name
+    labelWidth.value = f.labelWidth
+    labelHeight.value = f.labelHeight
+    headSeam.value = f.headSeam || 0
+    marginLR.value = f.marginLR ?? 2
+    defaultFont.value = f.defaultFontFamily
+    defaultFontSize.value = f.defaultFontSizePt
+    needsTranslation.value = f.needsTranslation
+    dictName.value = f.dictName || '巴拉'
+    if (setupEdit.value) {
+      ElMessage.success('配置已更新')
+      clearDictionaryCache()
+      await refreshBackTranslations()
+    } else {
+      elements.value = []
+      translatedElements.value = []
+      idCounter = 1
+      selectedId.value = null
+      selectedSide.value = 'front'
+      viewMode.value = 'editor'
+      fetchImageList()
+      clearDictionaryCache()
+    }
+    showSetupDialog.value = false
+    setupEdit.value = false
+  })
+}
 
 async function handleSave() { const data = { name: templateName.value, labelWidth: labelWidth.value, labelHeight: labelHeight.value, headSeam: headSeam.value, marginLR: marginLR.value, needsTranslation: needsTranslation.value, dictName: dictName.value, translateLangs: JSON.stringify(translateLangs.value), elements: JSON.stringify(elements.value), translatedElements: JSON.stringify(translatedElements.value) }; const res = await saveTemplate(data); if (res.code === 0) ElMessage.success('保存成功') }
 
-async function handleExportPDF() { if (!elements.value.length) { ElMessage.warning('请先添加元素'); return } exporting.value = true; try { const r = (s) => { if (!s) return ''; if (/^https?:\/\//.test(s) || /^data:/.test(s)) return s; return '/' + s.replace(/^\/+/, '') }; const re = arr => arr.map(el => el.type === 'image' && el.src ? { ...el, src: r(el.src) } : el); if (needsTranslation.value && translateLangs.value.length && dictName.value) dictionary.value = await fetchDictionary(dictName.value); const doc = await exportLabelPDF({ frontElements: re(elements.value), backElements: needsTranslation.value && translateLangs.value.length ? re(translatedElements.value) : null, config: { labelWidth: labelWidth.value, labelHeight: labelHeight.value, headSeam: headSeam.value, marginLR: marginLR.value }, translateInfo: needsTranslation.value ? { dictionary: dictionary.value, translateLangs: translateLangs.value } : null, fileName: `${templateName.value || '标签'}.pdf` }); if (doc) doc.save(`${templateName.value || '标签'}.pdf`); ElMessage.success('PDF 导出成功') } catch (e) { console.error(e); ElMessageBox.alert(e.message || '导出失败', '导出失败', { confirmButtonText: '知道了', type: 'error', dangerouslyUseHTMLString: true }) } finally { exporting.value = false } }
+async function handleExportPDF() {
+  if (!elements.value.length) { ElMessage.warning('请先添加元素'); return }
+  exporting.value = true
+  try {
+    const r = (s) => { if (!s) return ''; if (/^https?:\/\//.test(s) || /^data:/.test(s)) return s; return '/' + s.replace(/^\/+/, '') }
+    const re = arr => arr.map(el => el.type === 'image' && el.src ? { ...el, src: r(el.src) } : el)
+    if (needsTranslation.value && translateLangs.value.length && dictName.value) {
+      await refreshBackTranslations()
+    }
+    const doc = await exportLabelPDF({
+      frontElements: re(elements.value),
+      backElements: needsTranslation.value && translateLangs.value.length ? re(translatedElements.value) : null,
+      config: { labelWidth: labelWidth.value, labelHeight: labelHeight.value, headSeam: headSeam.value, marginLR: marginLR.value },
+      translateInfo: needsTranslation.value ? { lookup: makeTranslateLookup(dictName.value), translateLangs: translateLangs.value } : null,
+      fileName: `${templateName.value || '标签'}.pdf`
+    })
+    if (doc) doc.save(`${templateName.value || '标签'}.pdf`)
+    ElMessage.success('PDF 导出成功')
+  } catch (e) {
+    console.error(e)
+    ElMessageBox.alert(e.message || '导出失败', '导出失败', { confirmButtonText: '知道了', type: 'error', dangerouslyUseHTMLString: true })
+  } finally {
+    exporting.value = false
+  }
+}
 function langLabel(lang) { return { english: '英文', russian: '俄文', arabic: '阿语', indonesian: '印尼' }[lang] || lang }
 
 const activeElements = computed(() => selectedSide.value === 'front' ? elements.value : translatedElements.value)
@@ -352,25 +432,64 @@ watch(selectedLangKeys, (v) => {
 
 function findFrontByKey(key) { return key ? elements.value.find(e => e.key === key) : null }
 
+/** 收集反面所需的翻译任务并请求后端 */
+async function refreshBackTranslations() {
+  if (!needsTranslation.value || !dictName.value) return
+  const items = []
+  for (const backEl of translatedElements.value) {
+    if (backEl.type !== 'text' || !backEl.langKeys?.length) continue
+    const fe = findFrontByKey(backEl.key)
+    const text = fe?.text
+    if (!text || !String(text).trim() || text === '文本' || text === 'text') continue
+    items.push({ text, langs: [...backEl.langKeys] })
+  }
+  if (!items.length) {
+    translationTick.value++
+    return
+  }
+  try {
+    await translateMany(dictName.value, items)
+  } catch (e) {
+    console.error(e)
+    ElMessage.warning(e.message || '翻译失败')
+  }
+  translationTick.value++
+}
+
 /** 反面元素 → 获取指定语言的翻译文本（从正面按 key 取源文本） */
 function getLangTranslation(backEl, lang) {
-  if (!lang || !dictionary.value) return '...'
+  void translationTick.value
+  if (!lang || !dictName.value) return '...'
   const fe = findFrontByKey(backEl.key)
-  if (!fe || !fe.text || fe.text === '文本') return '文本'
-  return dictTranslate(dictionary.value, fe.text, lang) || ' '
+  if (!fe || !fe.text || fe.text === '文本' || fe.text === 'text') return '文本'
+  const cached = getCachedTranslation(dictName.value, fe.text, lang)
+  return cached !== null ? stripBidiMarks(cached) : '...'
+}
+
+function formatLangHtml(backEl, lang) {
+  const text = getLangTranslation(backEl, lang)
+  if (lang === 'arabic' && text && text !== '...' && text !== '文本') {
+    return formatArabicDisplayHtml(text)
+  }
+  return escapeHtml(text)
 }
 
 /** 执行翻译：仅更新当前元素的 enableTranslation + langKeys，不创建/合并其他元素 */
 async function translateOne(el) {
   const srcKey = el.key
   const srcEl = srcKey ? findFrontByKey(srcKey) : el
-  const t = srcEl?.text?.trim()
-  if (!t || t === '文本') { ElMessage.warning('请先在正面元素中输入文本内容'); return }
+  const t = srcEl?.text
+  if (!t || !String(t).trim() || t === '文本' || t === 'text') { ElMessage.warning('请先在正面元素中输入文本内容'); return }
   const langs = el.langKeys
   if (!langs || !langs.length) { ElMessage.warning('请选择至少一种翻译语言'); return }
   if (!dictName.value) { ElMessage.warning('请先选择翻译字典'); return }
-  if (!dictionary.value) dictionary.value = await fetchDictionary(dictName.value)
-  if (!dictionary.value) { ElMessage.warning('字典加载失败'); return }
+  try {
+    await translateMany(dictName.value, [{ text: t, langs: [...langs] }])
+    translationTick.value++
+  } catch (e) {
+    ElMessage.warning(e.message || '翻译失败')
+    return
+  }
   el.langKeys = [...langs]
   el.key = srcKey
   // 不覆盖已有字体/大小/宽高等属性
@@ -692,8 +811,24 @@ function restoreSelection() {
 }
 
 watch(selectedId, () => { const el = activeElements.value.find(e => e.id === selectedId.value); if (el?.type === 'text') loadRichHtml(el); if (el?.type === 'table') syncTableEdit(el) })
+
+// 正面文本变更后，防抖请求后端刷新反面译文（保留换行缩进）
+let refreshTimer = null
+watch(
+  () => elements.value.filter(e => e.type === 'text').map(e => `${e.key}\0${e.text}`).join('\x1e'),
+  () => {
+    if (!needsTranslation.value) return
+    clearTimeout(refreshTimer)
+    refreshTimer = setTimeout(() => { refreshBackTranslations() }, 400)
+  }
+)
+
 onMounted(() => { document.addEventListener('pointermove', onPointerMove); document.addEventListener('pointerup', onPointerUp) })
-onUnmounted(() => { document.removeEventListener('pointermove', onPointerMove); document.removeEventListener('pointerup', onPointerUp) })
+onUnmounted(() => {
+  document.removeEventListener('pointermove', onPointerMove)
+  document.removeEventListener('pointerup', onPointerUp)
+  clearTimeout(refreshTimer)
+})
 
 function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
 

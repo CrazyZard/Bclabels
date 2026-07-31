@@ -1,242 +1,128 @@
-import { getEntryList } from '@/plugin/dict/api/entry'
+import { translateBatch as apiTranslateBatch } from '@/plugin/dict/api/entry'
 
 /**
- * 字典格式（参照 buchang 项目）
- * { languages: string[], entries: Record<中文, Record<语言key, 译文>> }
+ * 前端翻译客户端：调用后端统一引擎，本地仅做结果缓存。
+ * 保留中文换行与缩进对齐由后端保证。
  */
 
-const LANG_MAP = {
-  english: 'english',
-  russian: 'russian',
-  arabic: 'arabic',
-  indonesian: 'indonesian'
+const cache = new Map() // `${dictName}\0${lang}\0${text}` → translated
+
+function cacheKey(dictName, lang, text) {
+  return `${dictName}\0${lang}\0${text}`
 }
 
-// 中文别名（同义词回退）
-const CHINESE_ALIASES = {
-  '成分': ['成份'],
-  '成份': ['成分'],
-  '面料': ['面布'],
-  '里料': ['里布'],
-}
-
-let cachedDict = null
-let cachedDictName = ''
-
-/** 从后端加载完整字典（使用已有的分页接口，避免权限问题） */
-export async function fetchDictionary(dictName) {
-  if (cachedDict && cachedDictName === dictName) {
-    console.log('[字典] 命中缓存:', dictName, Object.keys(cachedDict.entries).length, '条')
-    return cachedDict
-  }
-  console.log('[字典] 开始加载:', dictName)
-  try {
-    const res = await getEntryList({ dictName, page: 1, pageSize: 99999 })
-    console.log('[字典] API 返回:', res.code, 'data keys:', res.data ? Object.keys(res.data) : 'no data')
-    if (res.code !== 0) { console.error('[字典] 加载失败:', res); return null }
-    // GVA 分页返回: res.data = { list: [...], total: N, page: 1, pageSize: 99999 }
-    const rows = res.data?.list || (Array.isArray(res.data) ? res.data : [])
-    console.log('[字典] 获取到', rows.length, '条记录')
-    const entries = {}
-    const languages = new Set()
-    for (const row of rows) {
-      const entry = {}
-      if (row.english) { entry.english = row.english; languages.add('english') }
-      if (row.russian) { entry.russian = row.russian; languages.add('russian') }
-      if (row.arabic) { entry.arabic = row.arabic; languages.add('arabic') }
-      if (row.indonesian) { entry.indonesian = row.indonesian; languages.add('indonesian') }
-      entries[row.chinese] = entry
-    }
-    console.log('[字典] 构建完成:', Object.keys(entries).length, '条词条, 样例:', Object.keys(entries).slice(0, 5))
-    cachedDict = { languages: [...languages], entries }
-    cachedDictName = dictName
-    return cachedDict
-  } catch(e) {
-    console.error('[字典] 网络错误:', e)
-    return null
-  }
-}
-
-/** 清除缓存 */
+/** 清除缓存（切换字典时调用） */
 export function clearDictionaryCache() {
-  cachedDict = null
-  cachedDictName = ''
+  cache.clear()
 }
 
-/** 字典查找（含别名回退、括号变体） — 参照 buchang lookupTranslation */
-function lookup(dict, chinese, field) {
-  const trimmed = chinese.trim()
-  if (!trimmed) return null
-
-  // 构建候选 key 列表：原文、全角括号包裹、半角括号包裹、别名
-  const keys = new Set([
-    trimmed,
-    `（${trimmed}）`,
-    `(${trimmed})`,
-    ...(CHINESE_ALIASES[trimmed] ?? []),
-    ...(CHINESE_ALIASES[`（${trimmed}）`] ?? []),
-  ])
-
-  const queryHasParen = hasOuterParen(trimmed)
-  for (const key of keys) {
-    const direct = dict.entries[key]?.[field]?.trim()
-    if (direct) return normalizeLookupValue(direct, queryHasParen)
-    for (const alias of CHINESE_ALIASES[key] ?? []) {
-      const value = dict.entries[alias]?.[field]?.trim()
-      if (value) return normalizeLookupValue(value, queryHasParen)
-    }
-  }
-  return null
-}
-
-function hasOuterParen(s) {
-  const t = String(s || '').trim()
-  if (t.length < 2) return false
-  const first = t[0]
-  const last = t[t.length - 1]
-  return (first === '（' || first === '(') && (last === '）' || last === ')')
-}
-
-function stripOuterParen(s) {
-  let t = String(s || '').trim()
-  while (hasOuterParen(t)) {
-    t = t.slice(1, -1).trim()
-  }
-  return t
-}
-
-function normalizeLookupValue(v, queryHasParen) {
-  if (queryHasParen) return v
-  return stripOuterParen(v)
-}
-
-/** 拆分中文文本（括号内容、中文块、非中文块） */
-function splitText(text) {
-  const re = /（[^）]*）|[\u4e00-\u9fff]+|[^\u4e00-\u9fff]+/g
-  const m = text.match(re)
-  return m || [text]
-}
-
-// 内联括号匹配
-const WHOLE_PAREN_RE = /^[（(]([^（）()]+)[）)]$/
-const INLINE_PAREN_RE = /[（(]([^（）()]+)[）)]/g
-const HAS_PAREN_RE = /[（(][^（）()]+[）)]/
-
-/** 半角括号包裹；译文已自带括号时先剥掉，避免 ((xxx)) */
-function wrapInParen(translated) {
-  return `(${stripOuterParen(translated)})`
-}
-
-export function translateText(dict, chinese, lang) {
-  if (!dict || !chinese) return chinese
-  const field = LANG_MAP[lang]
-  if (!field) return chinese
-
-  const trimmed = chinese.trim()
-  if (!trimmed) return ''
-
-  // 按行分割，逐行翻译后合并（保留换行）
-  const lines = trimmed.split('\n')
-  return lines.map(line => translateLine(dict, line, field)).join('\n')
-}
-
-function translateLine(dict, chinese, field) {
-  const trimmed = chinese.trim()
-  if (!trimmed) return ''
-
-  // 1. 被全角括号完整包裹 → 翻译内容后用半角括号包裹
-  const wholeParen = trimmed.match(WHOLE_PAREN_RE)
-  if (wholeParen) {
-    const inner = wholeParen[1].trim()
-    const translated = lookup(dict, inner, field)
-    if (translated) return wrapInParen(translated)
-    return `[${inner}]`
-  }
-
-  // 2. 含内联括号 → 分段翻译
-  if (HAS_PAREN_RE.test(trimmed)) {
-    let result = ''
-    let lastIndex = 0
-    let match
-    // 重置正则状态后逐个匹配
-    const re = new RegExp(INLINE_PAREN_RE.source, 'g')
-    while ((match = re.exec(trimmed)) !== null) {
-      const before = trimmed.slice(lastIndex, match.index)
-      if (before) result += translatePlain(dict, before, field)
-      const inner = match[1].trim()
-      const translated = lookup(dict, inner, field)
-      result += translated ? wrapInParen(translated) : `[${inner}]`
-      lastIndex = re.lastIndex
-    }
-    const tail = trimmed.slice(lastIndex)
-    if (tail) result += translatePlain(dict, tail, field)
-    return result
-  }
-
-  // 3. 纯文本 → 冒号键值对或直接查字典
-  return translatePlain(dict, trimmed, field)
-}
-
-function translatePlain(dict, chinese, field) {
-  const trimmed = chinese.trim()
-  if (!trimmed) return ''
-
-  // 冒号分隔的键值对：“面料：70%棉 30%腈纶”（参照 buchang translateKeyValueLine）
-  const colonIdx = trimmed.search(/[：:]/)
-  if (colonIdx > 0) {
-    const label = trimmed.slice(0, colonIdx).trim()
-    const value = trimmed.slice(colonIdx + 1).trim()
-    const translatedLabel = lookup(dict, label, field)
-    const displayLabel = translatedLabel ? `${translatedLabel}:` : `${label}:`
-    const translatedValue = value ? translateCompositionValue(dict, value, field) ?? translatePlainText(dict, value, field) : ''
-    return translatedValue ? `${displayLabel} ${translatedValue}` : displayLabel
-  }
-
-  const exact = lookup(dict, trimmed, field)
-  if (exact) return exact
-
-  // 成分翻译
-  const compResult = translateCompositionValue(dict, trimmed, field)
-  if (compResult !== null) return compResult
-
-  return translatePlainText(dict, trimmed, field)
-}
-
-/** 纯文本逐词翻译 */
-function translatePlainText(dict, chinese, field) {
-  const parts = splitText(chinese)
-  return parts.map(p => {
-    if (!/[\u4e00-\u9fff]/.test(p)) return p
-    const t = lookup(dict, p.trim(), field)
-    return t !== null ? t : p
-  }).join('')
+/** 同步读取已缓存译文；未命中返回 null */
+export function getCachedTranslation(dictName, chinese, lang) {
+  if (!dictName || chinese == null || chinese === '' || !lang) return null
+  const hit = cache.get(cacheKey(dictName, lang, chinese))
+  return hit === undefined ? null : hit
 }
 
 /**
- * 成分值翻译：匹配 "百分比% 中文材质名" 模式（参照 buchang translateCompositionValue）
- * 示例： "70.3%棉 29.7%腈纶" → "70.3% Cotton 29.7% Acrylic"
- * 返回 null 表示不是成分格式，需要上层继续处理
+ * 同步查询（供 PDF 导出等已预取场景）
+ * @param {string} dictName
+ * @param {string} chinese
+ * @param {string} lang
  */
-function translateCompositionValue(dict, value, field) {
-  const pctNameRe = /(\d+(?:\.\d+)?)\s*[%％]\s*([\u4e00-\u9fff][\u4e00-\u9fff\w]*)/g
+export function translateText(dictName, chinese, lang) {
+  if (!dictName || !chinese || !lang) return chinese || ''
+  const cached = getCachedTranslation(dictName, chinese, lang)
+  return cached !== null ? cached : chinese
+}
 
-  let hasMatch = false
-  const result = value.replace(pctNameRe, (_match, pct, name) => {
-    hasMatch = true
-    const t = lookup(dict, name.trim(), field)
-    if (t && !t.startsWith('[')) {
-      return `${pct}% ${t}`
+/**
+ * 批量向后端请求翻译并写入缓存
+ * @param {string} dictName
+ * @param {{ text: string, langs: string[] }[]} items
+ */
+export async function translateMany(dictName, items) {
+  if (!dictName || !items?.length) return
+
+  const needMap = new Map() // text → Set(langs)
+  for (const it of items) {
+    const text = it.text
+    if (text == null || text === '' || !String(text).trim()) continue
+    const langs = (it.langs || []).filter(Boolean)
+    if (!langs.length) continue
+    let set = needMap.get(text)
+    if (!set) {
+      set = new Set()
+      needMap.set(text, set)
     }
-    return `${pct}%${name.trim()}`
-  })
+    for (const lang of langs) {
+      if (!cache.has(cacheKey(dictName, lang, text))) set.add(lang)
+    }
+  }
 
-  if (hasMatch) return result
+  const need = []
+  for (const [text, langSet] of needMap) {
+    if (langSet.size) need.push({ text, langs: [...langSet] })
+  }
+  if (!need.length) return
 
-  // 纯百分比值（如 "90％" → "90%"）
-  const pctOnlyRe = /(\d+(?:\.\d+)?)\s*[%％]/g
-  const pctOnlyResult = value.replace(pctOnlyRe, '$1%')
-  if (pctOnlyResult !== value) return pctOnlyResult
+  const res = await apiTranslateBatch({ dictName, items: need })
+  if (res.code !== 0) {
+    console.error('[翻译] 批量失败:', res)
+    throw new Error(res.msg || '批量翻译失败')
+  }
+  const list = res.data?.items || []
+  for (const item of list) {
+    const translations = item.translations || {}
+    for (const [lang, translated] of Object.entries(translations)) {
+      cache.set(cacheKey(dictName, lang, item.text), translated)
+    }
+  }
+}
 
-  // 无百分比模式：不是成分格式，返回 null
-  return null
+/**
+ * 构造供 PDF 使用的 lookup
+ */
+export function makeTranslateLookup(dictName) {
+  return (source, lang) => {
+    const cached = getCachedTranslation(dictName, source, lang)
+    let text = cached !== null ? cached : source
+    text = stripBidiMarks(text)
+    // PDF：阿语逻辑 %84.8 转成绘制用的 84.8%
+    if (lang === 'arabic') {
+      text = text.replace(/%(\d+(?:\.\d+)?)/g, '$1%')
+    }
+    return text
+  }
+}
+
+/** 去掉双向控制符，便于前端用 HTML 重新包一层 */
+export function stripBidiMarks(s) {
+  return String(s || '').replace(/[\u200E\u200F\u202A-\u202E\u2066-\u2069\u2060]/g, '')
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+/**
+ * 阿语预览：把 %84.8 / 84.8% 都规范成从左往右的 84.8% 显示
+ *（后端阿语逻辑序为 %84.8，避免 Excel/双向里看起来像百分号在左）
+ */
+export function formatArabicDisplayHtml(text) {
+  const plain = stripBidiMarks(text)
+  const escaped = escapeHtml(plain)
+  // 先处理逻辑序 %84.8，再处理普通 84.8%
+  return escaped
+    .replace(/%(\d+(?:\.\d+)?)/g, '<span dir="ltr" style="direction:ltr;unicode-bidi:bidi-override;display:inline">$1%</span>')
+    .replace(/(?<![%\d])(\d+(?:\.\d+)?)%/g, '<span dir="ltr" style="direction:ltr;unicode-bidi:bidi-override;display:inline">$1%</span>')
+}
+
+/** @deprecated 已改为后端翻译，保留空实现避免旧调用报错 */
+export async function fetchDictionary(dictName) {
+  if (!dictName) return null
+  return { dictName, entries: {} }
 }

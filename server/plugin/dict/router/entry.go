@@ -23,5 +23,8 @@ func (r *entry) Init(public *gin.RouterGroup, private *gin.RouterGroup) {
 		group.GET("findEntry", apiEntry.FindEntry)
 		group.GET("getEntryList", apiEntry.GetEntryList)
 		group.GET("loadDictionary", apiEntry.LoadDictionary)
+		group.GET("translateText", apiEntry.TranslateText)
+		group.POST("translateText", apiEntry.TranslateText)
+		group.POST("translateBatch", apiEntry.TranslateBatch)
 	}
 }

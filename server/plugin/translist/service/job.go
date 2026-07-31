@@ -14,7 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/flipped-aurora/gin-vue-admin/server/global"
-	dictModel "github.com/flipped-aurora/gin-vue-admin/server/plugin/dict/model"
+	dictService "github.com/flipped-aurora/gin-vue-admin/server/plugin/dict/service"
 	"github.com/flipped-aurora/gin-vue-admin/server/plugin/translist/model"
 	"github.com/flipped-aurora/gin-vue-admin/server/plugin/translist/model/request"
 	"github.com/xuri/excelize/v2"
@@ -341,32 +341,8 @@ func (s *job) translateExcelBytes(dictName string, srcBytes []byte) (result []by
 	return buf.Bytes(), translated, dict.MissList(), totalRows, nil
 }
 
-func (s *job) loadDict(dictName string) (*Dict, error) {
-	var entries []dictModel.Entry
-	if err := global.GVA_DB.Where("dict_name = ?", dictName).Find(&entries).Error; err != nil {
-		return nil, err
-	}
-	if len(entries) == 0 {
-		return nil, fmt.Errorf("字典「%s」为空，请先在翻译字典中导入词条", dictName)
-	}
-	d := &Dict{Entries: make(map[string]map[string]string, len(entries))}
-	for _, e := range entries {
-		m := map[string]string{}
-		if e.English != "" {
-			m["english"] = e.English
-		}
-		if e.Russian != "" {
-			m["russian"] = e.Russian
-		}
-		if e.Arabic != "" {
-			m["arabic"] = e.Arabic
-		}
-		if e.Indonesian != "" {
-			m["indonesian"] = e.Indonesian
-		}
-		d.Entries[e.Chinese] = m
-	}
-	return d, nil
+func (s *job) loadDict(dictName string) (*dictService.Dict, error) {
+	return dictService.LoadDict(dictName)
 }
 
 func detectColPairs(headers []string) []colPair {

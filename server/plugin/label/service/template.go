@@ -2,6 +2,7 @@ package service
 
 import (
 	"github.com/flipped-aurora/gin-vue-admin/server/global"
+	dictService "github.com/flipped-aurora/gin-vue-admin/server/plugin/dict/service"
 	"github.com/flipped-aurora/gin-vue-admin/server/plugin/label/model"
 )
 
@@ -71,31 +72,7 @@ func (s *template) ListPublished() ([]model.LabelTemplate, error) {
 	return list, err
 }
 
-// TranslateText 根据字典翻译文本字段
+// TranslateText 使用统一翻译引擎翻译文本
 func (s *template) TranslateText(dictName string, chinese string, lang string) (string, error) {
-	var entry struct {
-		English    string
-		Russian    string
-		Arabic     string
-		Indonesian string
-	}
-	err := global.GVA_DB.Table("gva_dict_entries").
-		Select("english, russian, arabic, indonesian").
-		Where("dict_name = ? AND chinese = ?", dictName, chinese).
-		First(&entry).Error
-	if err != nil {
-		return "", err
-	}
-	switch lang {
-	case "english":
-		return entry.English, nil
-	case "russian":
-		return entry.Russian, nil
-	case "arabic":
-		return entry.Arabic, nil
-	case "indonesian":
-		return entry.Indonesian, nil
-	default:
-		return "", nil
-	}
+	return dictService.Service.Entry.TranslateText(dictName, chinese, lang)
 }
