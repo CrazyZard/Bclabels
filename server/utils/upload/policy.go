@@ -7,7 +7,7 @@ import (
 )
 
 var allowedUploadExtensions = map[string]struct{}{
-	".jpg": {}, ".jpeg": {}, ".png": {}, ".gif": {}, ".webp": {}, ".bmp": {}, ".ico": {}, ".avif": {},
+	".jpg": {}, ".jpeg": {}, ".png": {}, ".gif": {}, ".webp": {}, ".bmp": {}, ".ico": {}, ".avif": {}, ".svg": {},
 	".mp3": {}, ".wav": {}, ".ogg": {}, ".m4a": {}, ".flac": {}, ".aac": {},
 	".mp4": {}, ".webm": {}, ".mov": {}, ".avi": {}, ".mkv": {},
 	".txt": {}, ".md": {}, ".csv": {}, ".json": {}, ".log": {}, ".pdf": {},
@@ -16,7 +16,7 @@ var allowedUploadExtensions = map[string]struct{}{
 }
 
 var inlineUploadExtensions = map[string]struct{}{
-	".jpg": {}, ".jpeg": {}, ".png": {}, ".gif": {}, ".webp": {}, ".bmp": {}, ".ico": {}, ".avif": {},
+	".jpg": {}, ".jpeg": {}, ".png": {}, ".gif": {}, ".webp": {}, ".bmp": {}, ".ico": {}, ".avif": {}, ".svg": {},
 	".mp3": {}, ".wav": {}, ".ogg": {}, ".m4a": {}, ".flac": {}, ".aac": {},
 	".mp4": {}, ".webm": {}, ".mov": {}, ".avi": {}, ".mkv": {},
 }

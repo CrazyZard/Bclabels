@@ -12,8 +12,10 @@ type Job struct {
 	TranslatedCells int    `json:"translatedCells" gorm:"column:translated_cells;comment:成功翻译单元格数"`
 	MissingCount    int    `json:"missingCount" gorm:"column:missing_count;comment:词典未命中词条数"`
 	MissingWords    string `json:"missingWords" gorm:"column:missing_words;comment:未命中词条JSON;type:longtext"`
-	SourcePath      string `json:"sourcePath" gorm:"column:source_path;comment:源文件路径;size:500"`
-	ResultPath      string `json:"resultPath" gorm:"column:result_path;comment:结果文件路径;size:500"`
+	SourcePath      string `json:"sourcePath" gorm:"column:source_path;comment:源文件URL或路径;size:500"`
+	SourceKey       string `json:"sourceKey" gorm:"column:source_key;comment:源文件OSS Key;size:255"`
+	ResultPath      string `json:"resultPath" gorm:"column:result_path;comment:结果文件URL或路径;size:500"`
+	ResultKey       string `json:"resultKey" gorm:"column:result_key;comment:结果文件OSS Key;size:255"`
 	ErrorMsg        string `json:"errorMsg" gorm:"column:error_msg;comment:错误信息;type:text"`
 	Remark          string `json:"remark" gorm:"column:remark;comment:备注;size:255"`
 }

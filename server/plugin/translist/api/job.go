@@ -14,7 +14,7 @@ var Job = new(job)
 
 type job struct{}
 
-// UploadAndTranslate 上传Excel并后台翻译
+// UploadAndTranslate 上传Excel到对象存储并翻译
 func (a *job) UploadAndTranslate(c *gin.Context) {
 	dictName := c.PostForm("dictName")
 	if dictName == "" {
@@ -27,7 +27,7 @@ func (a *job) UploadAndTranslate(c *gin.Context) {
 		return
 	}
 
-	job, err := serviceJob.UploadAndTranslate(dictName, file)
+	job, err := serviceJob.UploadAndTranslate(c.Request.Context(), dictName, file)
 	if err != nil {
 		global.GVA_LOG.Error("翻译失败!", zap.Error(err))
 		if job != nil {
@@ -43,7 +43,7 @@ func (a *job) UploadAndTranslate(c *gin.Context) {
 // DeleteJob 删除翻译任务
 func (a *job) DeleteJob(c *gin.Context) {
 	ID := c.Query("ID")
-	if err := serviceJob.DeleteJob(ID); err != nil {
+	if err := serviceJob.DeleteJob(c.Request.Context(), ID); err != nil {
 		global.GVA_LOG.Error("删除失败!", zap.Error(err))
 		response.FailWithMessage("删除失败", c)
 		return
@@ -54,7 +54,7 @@ func (a *job) DeleteJob(c *gin.Context) {
 // DeleteJobByIds 批量删除
 func (a *job) DeleteJobByIds(c *gin.Context) {
 	IDs := c.QueryArray("IDs[]")
-	if err := serviceJob.DeleteJobByIds(IDs); err != nil {
+	if err := serviceJob.DeleteJobByIds(c.Request.Context(), IDs); err != nil {
 		global.GVA_LOG.Error("批量删除失败!", zap.Error(err))
 		response.FailWithMessage("批量删除失败", c)
 		return
@@ -98,7 +98,7 @@ func (a *job) GetJobList(c *gin.Context) {
 // Retranslate 重新翻译
 func (a *job) Retranslate(c *gin.Context) {
 	ID := c.Query("ID")
-	job, err := serviceJob.Retranslate(ID)
+	job, err := serviceJob.Retranslate(c.Request.Context(), ID)
 	if err != nil {
 		global.GVA_LOG.Error("重新翻译失败!", zap.Error(err))
 		response.FailWithMessage(err.Error(), c)
@@ -110,11 +110,12 @@ func (a *job) Retranslate(c *gin.Context) {
 // ExportExcel 导出翻译结果
 func (a *job) ExportExcel(c *gin.Context) {
 	ID := c.Query("ID")
-	path, fileName, err := serviceJob.ExportPath(ID)
+	path, fileName, cleanup, err := serviceJob.ExportFile(c.Request.Context(), ID)
 	if err != nil {
 		response.FailWithMessage(err.Error(), c)
 		return
 	}
+	defer cleanup()
 	c.Header("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(fileName))
 	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 	c.FileAttachment(path, fileName)
